@@ -1,4 +1,4 @@
-﻿# 歌单文件桥接 · Twilight Echo 插件
+# 歌单文件桥接 · Twilight Echo 插件
 
 把**任意播放器**导出的歌单文件直接读进 Twilight Echo —— foobar2000、VLC、Winamp、
 AIMP、MusicBee、PotPlayer、Windows Media Player 等等，几十个歌单不用在播放器里再整理一遍：
@@ -71,7 +71,7 @@ AIMP、MusicBee、PotPlayer、Windows Media Player 等等，几十个歌单不�
 
 ### 从 `.tep` 安装（普通用户）
 
-1. 下载 `com.github.pxasen.playlist-bridge-1.0.4.tep`
+1. 下载 `com.github.pxasen.playlist-bridge-1.0.5.tep`
 2. Twilight Echo → **扩展中心** → 「从本地安装包 (.tep)」
 3. 确认权限并启用
 
@@ -89,7 +89,18 @@ AIMP、MusicBee、PotPlayer、Windows Media Player 等等，几十个歌单不�
 
 ## 4. 配置
 
-装好后进 **设置 → 系统与关于 → 插件设置 → 歌单文件桥接**：
+**设置 → 系统与关于**，往下滚到可折叠的 **「插件设置」** 分组：
+
+1. 点 **「插件设置」** 展开它（它是个折叠分组，默认是收起的）
+2. 找到 **「歌单文件桥接」** 那一行，点右边的 **「打开设置」** 按钮
+3. 表单出现后填 **「歌单文件夹」**
+
+> 更快的办法：设置页顶部有**搜索框**，输入「插件」，点搜索结果会直接跳过去并高亮。
+
+自检：**「插件设置」** 这行的右侧会写「N 个设置面板」。如果写的是
+**「暂无插件提供设置面板」**，说明插件没注册成功——去扩展中心确认它已启用。
+
+表单字段：
 
 | 选项 | 说明 |
 | --- | --- |
