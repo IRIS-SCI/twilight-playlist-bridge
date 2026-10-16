@@ -219,6 +219,7 @@ test('a successful scan tells the user where the playlists appear', { skip }, as
         assert.ok(located, `expected a location hint, got ${JSON.stringify(harness.notifications)}`)
         assert.match(located.message, /已索引 1 个歌单文件/)
         assert.match(located.message, /流媒体音乐/)
+        assert.match(located.message, /我的音乐库/)
       },
       { config: { playlistDirs: [listsDir], extensions: ['m3u8'] } }
     )

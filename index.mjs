@@ -146,7 +146,7 @@ function scheduleRefresh(context, { immediate = true } = {}) {
             .catch((error) => context.logger.warn(`记录引导状态失败：${error?.message ?? error}`))
           void notify(context, {
             kind: 'success',
-            message: `已索引 ${total} 个歌单文件。在左侧「流媒体音乐 → 我的音乐库」的资料卡上，把音源下拉切换成「歌单文件」就能看到。`,
+            message: `已索引 ${total} 个歌单文件。查看方法：左侧「流媒体音乐」→「我的音乐库」，点标题「…个人音乐库」右边那个写着音源名的小按钮，在弹出列表里选「歌单文件」。`,
             durationMs: 20000
           })
         }

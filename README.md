@@ -77,7 +77,7 @@ AIMP、MusicBee、PotPlayer、Windows Media Player 等等，几十个歌单不�
 
 ### 从 `.tep` 安装（普通用户）
 
-1. 下载 `com.github.pxasen.playlist-bridge-1.0.7.tep`
+1. 下载 `com.github.pxasen.playlist-bridge-1.0.8.tep`
 2. Twilight Echo → **扩展中心** → 「从本地安装包 (.tep)」
 3. 确认权限并启用
 
