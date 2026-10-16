@@ -1,5 +1,5 @@
 {
-  "id": "com.github.pxasen.playlist-bridge",
+  "id": "com.github.iris-sci.playlist-bridge",
   "name": "歌单文件桥接",
   "version": "1.1.0",
   "description": "直接读取任意播放器保存的 m3u8 / m3u / pls / xspf / wpl / asx / fpl / fplite 歌单文件，在 Twilight Echo 里按原样浏览和播放，无需逐个重新整理。",
@@ -22,5 +22,5 @@
     "library:write",
     "ui:inject"
   ],
-  "repository": "https://github.com/Px-asen/twilight-playlist-bridge"
+  "repository": "https://github.com/IRIS-SCI/twilight-playlist-bridge"
 }

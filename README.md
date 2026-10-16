@@ -4,7 +4,7 @@
 AIMP、MusicBee、PotPlayer、Windows Media Player 等等，几十个歌单不用在播放器里再整理一遍：
 歌单文件改了，播放器里跟着变。
 
-- 插件 ID：`com.github.pxasen.playlist-bridge`
+- 插件 ID：`com.github.iris-sci.playlist-bridge`
 - 作者：IRIS-SCI
 - 类型：`provider` + `ui`
 - 最低宿主版本：Twilight Echo `1.3.0`
@@ -84,7 +84,7 @@ AIMP、MusicBee、PotPlayer、Windows Media Player 等等，几十个歌单不�
 
 ### 从 `.tep` 安装（普通用户）
 
-1. 下载 `com.github.pxasen.playlist-bridge-1.1.0.tep`
+1. 下载 `com.github.iris-sci.playlist-bridge-1.1.0.tep`
 2. Twilight Echo → **扩展中心** → 「从本地安装包 (.tep)」
 3. 确认权限并启用
 
@@ -252,7 +252,7 @@ node --test          # 74 个测试
 
 ```bash
 node ../Twilight_Echo/packages/create-twilight-plugin/bin/create-twilight-plugin.cjs pack .
-# -> dist/com.github.pxasen.playlist-bridge-1.0.4.tep
+# -> dist/com.github.iris-sci.playlist-bridge-1.0.4.tep
 ```
 
 ### 源码结构
