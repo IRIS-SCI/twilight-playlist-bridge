@@ -240,6 +240,15 @@ test('the registered provider satisfies the host library/playlist contract', { s
     assert.ok(provider.capabilities.includes('playlist'))
     assert.ok(provider.capabilities.includes('playbackUrl'))
 
+    // `login` looks wrong for a plugin that never logs in, but it is load
+    // bearing: the host gates its external-provider state refresh on this
+    // capability (StreamingPage.vue:3561), and without that refresh
+    // `state.loggedIn` stays false and the library never loads
+    // (StreamingPage.vue:1703). Do not remove it without re-reading those two
+    // lines.
+    assert.ok(provider.capabilities.includes('login'))
+    assert.equal(provider.ui.authType, 'settings')
+
     // host.ts copies every function-valued method into the handler table, so
     // these keys are exactly what the host will call.
     for (const method of [

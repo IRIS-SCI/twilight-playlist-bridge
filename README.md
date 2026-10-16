@@ -77,7 +77,7 @@ AIMP、MusicBee、PotPlayer、Windows Media Player 等等，几十个歌单不�
 
 ### 从 `.tep` 安装（普通用户）
 
-1. 下载 `com.github.pxasen.playlist-bridge-1.0.8.tep`
+1. 下载 `com.github.pxasen.playlist-bridge-1.0.9.tep`
 2. Twilight Echo → **扩展中心** → 「从本地安装包 (.tep)」
 3. 确认权限并启用
 
@@ -194,6 +194,13 @@ Twilight Echo 只允许播放**已授权目录**（音乐库目录、托管缓�
 ## 8. 已知限制
 
 - **不能写入本地歌单**，原因见 §2。
+- **声明了 `login` 能力，但实际不需要登录**——这是绕过宿主一个 bug 的必要手段。
+  宿主只在 provider 声明 `login` 时才刷新它的状态（`StreamingPage.vue:3561`），
+  而那次刷新是唯一会把 `state.loggedIn` 置为 true 的地方；不声明的话
+  `state.loggedIn` 永远是 false，音乐库列表永远加载不出来
+  （`StreamingPage.vue:1703` 直接 return）。宿主里那段「没有 login 能力就视为已登录」
+  的分支（`StreamingPage.vue:1674`）是**死代码**，永远执行不到。
+  代价是登录页会多出一张「歌单文件」卡片，点开只提示去插件设置里配置。
 - **`.fpl` 的元数据依赖逆向格式**，fb2k 大版本更新后可能需要跟着改。
 - **`.fplite` / `.wpl` 没有元数据**，曲目名取自文件名。
 - **单次扫描上限**：2000 个歌单文件、每个歌单 20000 条、单个文件 8 MiB，达到上限会提示。
