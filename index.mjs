@@ -34,12 +34,15 @@ const SETTINGS_COMMAND = 'plfile.settings'
 
 /** Remembers that the "point me at a folder" hint has already been shown. */
 const SETUP_ANNOUNCED_KEY = 'setupAnnounced'
+/** Remembers that the "here is where your playlists appear" hint was shown. */
+const LOCATED_ANNOUNCED_KEY = 'locatedAnnounced'
 
 /** @type {ReturnType<typeof createPlaylistFileProvider> | null} */
 let runtime = null
 let disposers = []
 let refreshTimer = null
 let setupAnnounced = false
+let locatedAnnounced = false
 
 /** Persisted config, kept in memory so provider calls never await a read. */
 let currentConfig = { ...DEFAULT_CONFIG }
@@ -85,8 +88,10 @@ async function loadConfig(context) {
   }
   try {
     setupAnnounced = (await context.settings.get(SETUP_ANNOUNCED_KEY)) === true
+    locatedAnnounced = (await context.settings.get(LOCATED_ANNOUNCED_KEY)) === true
   } catch {
     setupAnnounced = false
+    locatedAnnounced = false
   }
   return currentConfig
 }
@@ -131,6 +136,18 @@ function scheduleRefresh(context, { immediate = true } = {}) {
           void notify(context, {
             kind: 'warning',
             message: '没有在指定目录找到歌单文件，请检查「歌单文件夹」和扩展名设置。'
+          })
+        } else if (total > 0 && !locatedAnnounced) {
+          // The playlists live under a sidebar group that is collapsed by
+          // default, so without this nobody finds them.
+          locatedAnnounced = true
+          context.settings
+            .set(LOCATED_ANNOUNCED_KEY, true)
+            .catch((error) => context.logger.warn(`记录引导状态失败：${error?.message ?? error}`))
+          void notify(context, {
+            kind: 'success',
+            message: `已索引 ${total} 个歌单文件。在左侧「流媒体音乐 → 我的音乐库」的资料卡上，把音源下拉切换成「歌单文件」就能看到。`,
+            durationMs: 20000
           })
         }
       })

@@ -54,7 +54,7 @@ async function loadHostModule(relativePath) {
   return await import(pathToFileURL(path.join(hostSource, relativePath)).href)
 }
 
-function createFakeContext(storagePath) {
+function createFakeContext(storagePath, storedSettings = {}) {
   const commands = new Map()
   const contributions = []
   const notifications = []
@@ -65,8 +65,8 @@ function createFakeContext(storagePath) {
     storagePath,
     logger: { debug() {}, info() {}, warn() {}, error() {} },
     settings: {
-      async get() {
-        return undefined
+      async get(key) {
+        return storedSettings[key]
       },
       async set() {},
       async delete() {}
@@ -98,9 +98,9 @@ function createFakeContext(storagePath) {
   return { context, commands, contributions, notifications, providers }
 }
 
-async function withPlugin(run) {
+async function withPlugin(run, storedSettings = {}) {
   const storagePath = await fs.mkdtemp(path.join(os.tmpdir(), 'plfile-conformance-'))
-  const harness = createFakeContext(storagePath)
+  const harness = createFakeContext(storagePath, storedSettings)
   const plugin = await import(pathToFileURL(path.join(pluginRoot, 'index.mjs')).href)
   try {
     await plugin.activate(harness.context)
@@ -199,6 +199,32 @@ test('a fresh install announces where to configure it', { skip }, async () => {
     assert.match(notice.message, /我的音乐库/)
     assert.ok(notice.durationMs >= 2500 && notice.durationMs <= 30000)
   })
+})
+
+test('a successful scan tells the user where the playlists appear', { skip }, async () => {
+  // The playlists land under a sidebar group that is collapsed by default, so
+  // the location hint is the only thing that makes them findable.
+  const listsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'plfile-lists-'))
+  try {
+    await fs.writeFile(path.join(listsDir, '星际穿越OST.m3u8'), '#\nD:\\Music\\a.flac\n')
+
+    await withPlugin(
+      async (harness) => {
+        // The initial scan is deliberately deferred so activation stays inside
+        // the host's 5 s budget; wait for it to land.
+        await new Promise((resolve) => setTimeout(resolve, 600))
+        const located = harness.notifications.find((notice) =>
+          notice.message.includes('我的音乐库')
+        )
+        assert.ok(located, `expected a location hint, got ${JSON.stringify(harness.notifications)}`)
+        assert.match(located.message, /已索引 1 个歌单文件/)
+        assert.match(located.message, /流媒体音乐/)
+      },
+      { config: { playlistDirs: [listsDir], extensions: ['m3u8'] } }
+    )
+  } finally {
+    await fs.rm(listsDir, { recursive: true, force: true })
+  }
 })
 
 test('the registered provider satisfies the host library/playlist contract', { skip }, async () => {
