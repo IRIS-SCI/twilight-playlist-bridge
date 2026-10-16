@@ -24,10 +24,14 @@ const SETTINGS_LOAD = 'plfile.settings.load'
 const SETTINGS_SAVE = 'plfile.settings.save'
 const SETTINGS_RESET = 'plfile.settings.reset'
 
+/** Remembers that the "point me at a folder" hint has already been shown. */
+const SETUP_ANNOUNCED_KEY = 'setupAnnounced'
+
 /** @type {ReturnType<typeof createPlaylistFileProvider> | null} */
 let runtime = null
 let disposers = []
 let refreshTimer = null
+let setupAnnounced = false
 
 /** Persisted config, kept in memory so provider calls never await a read. */
 let currentConfig = { ...DEFAULT_CONFIG }
@@ -71,7 +75,32 @@ async function loadConfig(context) {
     context.logger.warn(`读取配置失败，已使用默认值：${error?.message ?? error}`)
     currentConfig = normalizeConfig(DEFAULT_CONFIG)
   }
+  try {
+    setupAnnounced = (await context.settings.get(SETUP_ANNOUNCED_KEY)) === true
+  } catch {
+    setupAnnounced = false
+  }
   return currentConfig
+}
+
+/**
+ * A freshly installed plugin otherwise looks like it did nothing at all: the
+ * provider stays invisible until a folder is configured, and the settings panel
+ * is buried under 设置 → 系统与关于. Say so once, out loud.
+ */
+function announceSetupIfNeeded(context) {
+  if (setupAnnounced || currentConfig.playlistDirs.length > 0) return
+  setupAnnounced = true
+  context.settings
+    .set(SETUP_ANNOUNCED_KEY, true)
+    .catch((error) => context.logger.warn(`记录引导状态失败：${error?.message ?? error}`))
+
+  void notify(context, {
+    kind: 'info',
+    message:
+      '歌单文件桥接已启用。下一步：设置 → 系统与关于 → 插件设置 → 歌单文件桥接，填入存放歌单的文件夹；填好后歌单会出现在「我的音乐库」的音源下拉里。',
+    durationMs: 15000
+  })
 }
 
 /** Background scan. Never awaited by a command handler. */
@@ -176,6 +205,7 @@ export async function activate(context) {
   })
 
   scheduleRefresh(context, { immediate: false })
+  announceSetupIfNeeded(context)
   context.logger.info('歌单文件桥接已启动')
 }
 

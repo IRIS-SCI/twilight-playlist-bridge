@@ -1,4 +1,4 @@
-# 歌单文件桥接 · Twilight Echo 插件
+﻿# 歌单文件桥接 · Twilight Echo 插件
 
 把**任意播放器**导出的歌单文件直接读进 Twilight Echo —— foobar2000、VLC、Winamp、
 AIMP、MusicBee、PotPlayer、Windows Media Player 等等，几十个歌单不用在播放器里再整理一遍：
@@ -71,11 +71,14 @@ AIMP、MusicBee、PotPlayer、Windows Media Player 等等，几十个歌单不�
 
 ### 从 `.tep` 安装（普通用户）
 
-1. 下载 `com.github.pxasen.playlist-bridge-1.0.3.tep`
+1. 下载 `com.github.pxasen.playlist-bridge-1.0.4.tep`
 2. Twilight Echo → **扩展中心** → 「从本地安装包 (.tep)」
 3. 确认权限并启用
 
-启用后插件立即开始运行，**不用重启应用**。
+启用后插件立即开始运行，**不用重启应用**，并会弹出一条提示告诉你下一步去哪里配置
+（只弹一次）。
+
+> **装完后看不到任何歌单是正常的。** 在 §4 填好「歌单文件夹」之前，插件没有东西可显示。
 
 ### 从文件夹安装（开发）
 
@@ -190,7 +193,7 @@ Twilight Echo 只允许播放**已授权目录**（音乐库目录、托管缓�
 不需要安装任何依赖：
 
 ```bash
-node --test          # 69 个测试
+node --test          # 70 个测试
 ```
 
 两类测试：
@@ -213,7 +216,7 @@ node --test          # 69 个测试
 
 ```bash
 node ../Twilight_Echo/packages/create-twilight-plugin/bin/create-twilight-plugin.cjs pack .
-# -> dist/com.github.pxasen.playlist-bridge-1.0.3.tep
+# -> dist/com.github.pxasen.playlist-bridge-1.0.4.tep
 ```
 
 ### 源码结构

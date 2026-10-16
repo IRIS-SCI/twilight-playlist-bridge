@@ -174,6 +174,18 @@ test('activate registers a host-valid UI contribution and settings form', { skip
   })
 })
 
+test('a fresh install announces where to configure it', { skip }, async () => {
+  // Without this the plugin looks inert after install: the provider stays
+  // invisible until a folder is set, and the panel is buried in the settings.
+  await withPlugin(async (harness) => {
+    assert.equal(harness.notifications.length, 1)
+    const notice = harness.notifications[0]
+    assert.match(notice.message, /插件设置/)
+    assert.match(notice.message, /我的音乐库/)
+    assert.ok(notice.durationMs >= 2500 && notice.durationMs <= 30000)
+  })
+})
+
 test('the registered provider satisfies the host library/playlist contract', { skip }, async () => {
   await withPlugin(async (harness) => {
     assert.equal(harness.providers.length, 1)
