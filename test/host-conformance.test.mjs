@@ -1,0 +1,209 @@
+/**
+ * Conformance test against the real Twilight Echo host code.
+ *
+ * Instead of re-implementing the host's rules, this loads the host's own
+ * validators from a Twilight Echo checkout and runs the plugin's real
+ * `activate()` against them:
+ *
+ *   - `validatePluginManifest`      (src/main/plugins/manifest.ts)
+ *   - `isCompatibleTwilightRange`   (src/main/plugins/versionRange.ts)
+ *   - `normalizeUiContribution`     (src/main/plugins/themeContribution.ts)
+ *   - `normalizePluginSettingsForm` (src/renderer/.../pluginSettingsForm.ts)
+ *
+ * The checkout is located via `TWILIGHT_ECHO_SRC`, or as a sibling/parent of
+ * this plugin. When no checkout is present the suite is skipped rather than
+ * failed, so the plugin's own unit tests still run standalone.
+ */
+
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+
+const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+
+async function isHostCheckout(candidate) {
+  try {
+    await fs.access(path.join(candidate, 'src', 'main', 'plugins', 'manifest.ts'))
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function findHostSource() {
+  const candidates = [
+    process.env.TWILIGHT_ECHO_SRC,
+    path.resolve(pluginRoot, '..'),
+    path.resolve(pluginRoot, '..', 'Twilight_Echo'),
+    path.resolve(pluginRoot, '..', '..', 'Twilight_Echo')
+  ].filter(Boolean)
+
+  for (const candidate of candidates) {
+    if (await isHostCheckout(candidate)) return candidate
+  }
+  return null
+}
+
+const hostSource = await findHostSource()
+const skip = hostSource ? false : 'no Twilight Echo checkout found (set TWILIGHT_ECHO_SRC)'
+
+async function loadHostModule(relativePath) {
+  return await import(pathToFileURL(path.join(hostSource, relativePath)).href)
+}
+
+function createFakeContext(storagePath) {
+  const commands = new Map()
+  const contributions = []
+  const notifications = []
+  const providers = []
+
+  const context = {
+    apiVersion: 3,
+    storagePath,
+    logger: { debug() {}, info() {}, warn() {}, error() {} },
+    settings: {
+      async get() {
+        return undefined
+      },
+      async set() {},
+      async delete() {}
+    },
+    twilight: {
+      events: { on: () => () => {} },
+      player: {},
+      providers: {
+        async register(provider) {
+          providers.push(provider)
+        }
+      },
+      ui: {
+        async register(contribution) {
+          contributions.push(contribution)
+        },
+        onCommand(command, handler) {
+          commands.set(command, handler)
+          return () => commands.delete(command)
+        },
+        async notify(notice) {
+          notifications.push(notice)
+        }
+      },
+      themes: {}
+    }
+  }
+
+  return { context, commands, contributions, notifications, providers }
+}
+
+async function withPlugin(run) {
+  const storagePath = await fs.mkdtemp(path.join(os.tmpdir(), 'plfile-conformance-'))
+  const harness = createFakeContext(storagePath)
+  const plugin = await import(pathToFileURL(path.join(pluginRoot, 'index.mjs')).href)
+  try {
+    await plugin.activate(harness.context)
+    await run(harness)
+  } finally {
+    await plugin.deactivate()
+    await fs.rm(storagePath, { recursive: true, force: true })
+  }
+}
+
+test('manifest and engines range are accepted by the host', { skip }, async () => {
+  const { validatePluginManifest, isCompatibleTwilightRange } = await loadHostModule(
+    'src/main/plugins/manifest.ts'
+  )
+  const raw = JSON.parse(await fs.readFile(path.join(pluginRoot, 'plugin.json'), 'utf-8'))
+  const manifest = validatePluginManifest(raw)
+  assert.equal(manifest.id, raw.id)
+
+  const appVersion = JSON.parse(await fs.readFile(path.join(hostSource, 'package.json'), 'utf-8'))
+    .version
+  assert.equal(
+    isCompatibleTwilightRange(manifest.engines.twilightEcho, appVersion),
+    true,
+    `host ${appVersion} must satisfy ${manifest.engines.twilightEcho}`
+  )
+})
+
+test('activate registers a host-valid UI contribution and settings form', { skip }, async () => {
+  const { normalizeUiContribution } = await loadHostModule('src/main/plugins/themeContribution.ts')
+  const { normalizePluginSettingsForm } = await loadHostModule(
+    'src/renderer/src/components/settings-page/pluginSettingsForm.ts'
+  )
+  const manifest = JSON.parse(await fs.readFile(path.join(pluginRoot, 'plugin.json'), 'utf-8'))
+
+  await withPlugin(async (harness) => {
+    assert.equal(harness.contributions.length, 1)
+    const contribution = normalizeUiContribution(
+      manifest.type,
+      manifest.permissions,
+      harness.contributions[0]
+    )
+    assert.equal(contribution.kind, 'settingsPanel')
+    assert.equal(contribution.autoLoad, true)
+    assert.ok(contribution.command)
+
+    // The command the contribution points at must actually be registered, or the
+    // host would fail the panel with "UI command 未注册".
+    const handler = harness.commands.get(contribution.command)
+    assert.equal(typeof handler, 'function')
+
+    const result = await handler(
+      { source: 'settingsPanel', panelId: contribution.id },
+      { signal: new AbortController().signal }
+    )
+    const form = normalizePluginSettingsForm(result)
+    assert.ok(form, 'host must accept the settings-form DTO')
+    assert.equal(form.submitCommand, 'plfile.settings.save')
+    assert.ok(harness.commands.has(form.submitCommand))
+    assert.ok(harness.commands.has(form.resetCommand))
+
+    // Submitting must stay well inside the host's 5 s command budget.
+    const started = Date.now()
+    const saved = await harness.commands.get(form.submitCommand)(
+      { playlistDirs: 'D:\\Music\\playlists', recursive: 'false' },
+      { signal: new AbortController().signal }
+    )
+    const elapsed = Date.now() - started
+    assert.ok(elapsed < 2000, `settings save took ${elapsed}ms`)
+    assert.equal(typeof saved.message, 'string')
+    assert.ok(normalizePluginSettingsForm(saved.form))
+  })
+})
+
+test('the registered provider satisfies the host library/playlist contract', { skip }, async () => {
+  await withPlugin(async (harness) => {
+    assert.equal(harness.providers.length, 1)
+    const provider = harness.providers[0]
+
+    assert.equal(provider.id, 'plfile')
+    // `library` is what puts the provider in the 音乐库 source switcher, and the
+    // host only allows it when the manifest declares library:read.
+    assert.ok(provider.capabilities.includes('library'))
+    assert.ok(provider.capabilities.includes('playlist'))
+    assert.ok(provider.capabilities.includes('playbackUrl'))
+
+    // host.ts copies every function-valued method into the handler table, so
+    // these keys are exactly what the host will call.
+    for (const method of [
+      'checkLogin',
+      'getProfile',
+      'fetchUserLibrary',
+      'fetchPlaylistTracks',
+      'getPlaybackUrl'
+    ]) {
+      assert.equal(typeof provider[method], 'function', `${method} must be a function`)
+    }
+
+    const login = await provider.checkLogin()
+    assert.equal(login.loggedIn, true)
+
+    const library = await provider.fetchUserLibrary(false)
+    assert.ok(library && typeof library === 'object')
+    assert.ok(Array.isArray(library.playlists))
+    assert.ok('likedPlaylist' in library)
+  })
+})
