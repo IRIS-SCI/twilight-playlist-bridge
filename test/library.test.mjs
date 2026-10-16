@@ -54,6 +54,23 @@ test('parseDirectoryList accepts semicolons, pipes and newlines but keeps drive 
   assert.deepEqual(parseDirectoryList(''), [])
 })
 
+test('parseDirectoryList expands environment variables and ~', () => {
+  const key = 'PLFILE_TEST_DIR'
+  process.env[key] = 'E:\\Expanded'
+  try {
+    assert.deepEqual(parseDirectoryList(`%${key}%\\playlists`), ['E:\\Expanded\\playlists'])
+    // Node's process.env is case-insensitive on Windows; make sure lookup works.
+    assert.deepEqual(parseDirectoryList(`%${key.toLowerCase()}%\\x`), ['E:\\Expanded\\x'])
+  } finally {
+    delete process.env[key]
+  }
+
+  // An unknown variable must stay literal rather than collapsing to an empty
+  // path, so a stray `%` in a folder name is not silently swallowed.
+  assert.deepEqual(parseDirectoryList('%NO_SUCH_VAR_XYZ%\\a'), ['%NO_SUCH_VAR_XYZ%\\a'])
+  assert.deepEqual(parseDirectoryList('~'), [os.homedir()])
+})
+
 test('normalizeConfig clamps and defaults every field', () => {
   const config = normalizeConfig({ playlistDirs: 'D:\\a', recursive: 'true', maxPlaylists: 99999 })
   assert.deepEqual(config.playlistDirs, ['D:\\a'])
