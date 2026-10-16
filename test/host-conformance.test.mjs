@@ -151,26 +151,41 @@ test('activate registers a host-valid UI contribution and settings form', { skip
     const handler = harness.commands.get(contribution.command)
     assert.equal(typeof handler, 'function')
 
-    const result = await handler(
-      { source: 'settingsPanel', panelId: contribution.id },
-      { signal: new AbortController().signal }
-    )
+    const signal = new AbortController().signal
+    const result = await handler({ source: 'settingsPanel', panelId: contribution.id }, { signal })
     const form = normalizePluginSettingsForm(result)
     assert.ok(form, 'host must accept the settings-form DTO')
-    assert.equal(form.submitCommand, 'plfile.settings.save')
-    assert.ok(harness.commands.has(form.submitCommand))
-    assert.ok(harness.commands.has(form.resetCommand))
+
+    // The host routes a command only if some registered contribution declares
+    // it (manager.ts:720). Anything the renderer can invoke must therefore be
+    // the command of a contribution — this is the check that the real
+    // "UI command 未注册: plfile.settings.save" failure was missing.
+    const routable = new Set(
+      harness.contributions.map((entry) => entry.command).filter(Boolean)
+    )
+    for (const command of [contribution.command, form.submitCommand, form.resetCommand]) {
+      assert.ok(
+        routable.has(command),
+        `host cannot route "${command}": no UI contribution declares it`
+      )
+      assert.ok(harness.commands.has(command), `no handler registered for "${command}"`)
+    }
 
     // Submitting must stay well inside the host's 5 s command budget.
     const started = Date.now()
     const saved = await harness.commands.get(form.submitCommand)(
       { playlistDirs: 'D:\\Music\\playlists', recursive: 'false' },
-      { signal: new AbortController().signal }
+      { signal }
     )
     const elapsed = Date.now() - started
     assert.ok(elapsed < 2000, `settings save took ${elapsed}ms`)
     assert.equal(typeof saved.message, 'string')
     assert.ok(normalizePluginSettingsForm(saved.form))
+
+    // Reset arrives with no payload at all.
+    const reset = await harness.commands.get(form.resetCommand)({ signal })
+    assert.equal(reset.message, '已恢复默认设置')
+    assert.ok(normalizePluginSettingsForm(reset.form))
   })
 })
 

@@ -83,8 +83,8 @@ test('normalizeConfig clamps and defaults every field', () => {
 test('buildSettingsForm produces a host-valid settings-form DTO', () => {
   const form = buildSettingsForm(normalizeConfig({ playlistDirs: 'D:\\a' }), 'notice text')
   assert.equal(form.kind, 'settings-form')
-  assert.equal(form.submitCommand, 'plfile.settings.save')
-  assert.equal(form.resetCommand, 'plfile.settings.reset')
+  assert.equal(form.submitCommand, 'plfile.settings')
+  assert.equal(form.resetCommand, 'plfile.settings')
   assert.ok(form.fields.length <= 40)
   for (const field of form.fields) {
     assert.match(field.key, /^[A-Za-z0-9_.:-]{1,80}$/)

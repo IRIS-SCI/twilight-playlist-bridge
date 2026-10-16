@@ -20,9 +20,17 @@ import {
 } from './lib/config.mjs'
 import { createPlaylistFileProvider } from './lib/provider.mjs'
 
-const SETTINGS_LOAD = 'plfile.settings.load'
-const SETTINGS_SAVE = 'plfile.settings.save'
-const SETTINGS_RESET = 'plfile.settings.reset'
+/**
+ * One command serves load, save and reset.
+ *
+ * The host resolves a command's owner by scanning *registered UI contributions*
+ * for one whose `command` matches, and rejects anything else with
+ * "UI command 未注册" (manager.ts:720). Calling `ui.onCommand` for a name that
+ * no contribution declares is therefore useless — the renderer can never reach
+ * it. Since a plugin only gets one settings panel, all three operations share
+ * the command that panel declares and are told apart by their arguments.
+ */
+const SETTINGS_COMMAND = 'plfile.settings'
 
 /** Remembers that the "point me at a folder" hint has already been shown. */
 const SETUP_ANNOUNCED_KEY = 'setupAnnounced'
@@ -151,6 +159,36 @@ function registerCommand(context, command, handler) {
   if (typeof dispose === 'function') disposers.push(dispose)
 }
 
+/** Persists a submitted settings form and kicks off a background rescan. */
+async function applySettings(context, values) {
+  const next = configFromForm(values)
+  currentConfig = next
+  // Persisting must not be able to blow the 5 s command budget.
+  context.settings
+    .set(CONFIG_KEY, next)
+    .catch((error) => context.logger.error(`保存配置失败：${error?.message ?? error}`))
+
+  runtime?.library.invalidateAll()
+  scheduleRefresh(context, { immediate: true })
+
+  const dirCount = next.playlistDirs.length
+  return {
+    message:
+      dirCount === 0
+        ? '已保存，但没有填写歌单文件夹，暂时不会出现任何歌单。'
+        : `已保存 ${dirCount} 个目录，正在后台重新扫描。稍后回到音乐库刷新即可看到歌单。`,
+    form: buildForm()
+  }
+}
+
+async function resetSettings(context) {
+  currentConfig = normalizeConfig(DEFAULT_CONFIG)
+  await context.settings.set(CONFIG_KEY, currentConfig)
+  runtime?.library.invalidateAll()
+  scheduleRefresh(context, { immediate: true })
+  return { message: '已恢复默认设置', form: buildForm() }
+}
+
 export async function activate(context) {
   const provider = createPlaylistFileProvider({
     getConfig: () => currentConfig,
@@ -160,36 +198,14 @@ export async function activate(context) {
 
   await loadConfig(context)
 
-  registerCommand(context, SETTINGS_LOAD, () => buildForm())
-
-  registerCommand(context, SETTINGS_SAVE, async (values) => {
-    const submitted = values && typeof values === 'object' ? values : {}
-    const next = configFromForm(submitted)
-    currentConfig = next
-    // Persisting must not be able to blow the 5 s command budget.
-    context.settings
-      .set(CONFIG_KEY, next)
-      .catch((error) => context.logger.error(`保存配置失败：${error?.message ?? error}`))
-
-    provider.library.invalidateAll()
-    scheduleRefresh(context, { immediate: true })
-
-    const dirCount = next.playlistDirs.length
-    return {
-      message:
-        dirCount === 0
-          ? '已保存，但没有填写歌单文件夹，暂时不会出现任何歌单。'
-          : `已保存 ${dirCount} 个目录，正在后台重新扫描。稍后回到音乐库刷新即可看到歌单。`,
-      form: buildForm()
-    }
-  })
-
-  registerCommand(context, SETTINGS_RESET, async () => {
-    currentConfig = normalizeConfig(DEFAULT_CONFIG)
-    await context.settings.set(CONFIG_KEY, currentConfig)
-    provider.library.invalidateAll()
-    scheduleRefresh(context, { immediate: true })
-    return { message: '已恢复默认设置', form: buildForm() }
+  registerCommand(context, SETTINGS_COMMAND, async (...args) => {
+    // The host appends its own context object as the final argument, so the
+    // shape of the *first* argument is what distinguishes the three calls:
+    // absent = reset, `{ source: 'settingsPanel' }` = load, a field map = save.
+    const payload = args.length > 1 ? args[0] : undefined
+    if (!payload || typeof payload !== 'object') return await resetSettings(context)
+    if (payload.source === 'settingsPanel') return buildForm()
+    return await applySettings(context, payload)
   })
 
   await context.twilight.providers.register(provider.providerRegistration())
@@ -200,7 +216,7 @@ export async function activate(context) {
     title: '歌单文件桥接',
     description: '读取任意播放器保存的 m3u8 / m3u / pls / xspf / wpl / fpl / fplite 歌单',
     icon: 'pi pi-list',
-    command: SETTINGS_LOAD,
+    command: SETTINGS_COMMAND,
     autoLoad: true
   })
 
