@@ -64,7 +64,7 @@ AIMP、MusicBee、PotPlayer、Windows Media Player 等等，几十个歌单不�
 
 ### 从 `.tep` 安装（普通用户）
 
-1. 下载 `com.github.pxasen.playlist-bridge-1.0.0.tep`
+1. 下载 `com.github.pxasen.playlist-bridge-1.0.1.tep`
 2. Twilight Echo → **扩展中心** → 「从本地安装包 (.tep)」
 3. 确认权限并启用
 
@@ -243,9 +243,10 @@ lib/
 
 | 权限 | 用途 |
 | --- | --- |
+| `network` | **不是本插件要联网。** 宿主把「注册 provider」这个动作本身用 `network` 权限兜底（`manager.ts:1573`：`requirePermission(pluginId, 'network', 'providers.register')`），不声明就无法注册音源，安装时的试运行也会直接失败。插件代码里没有任何网络调用。 |
 | `filesystem:read` | 读取你指定目录下的歌单文件，并检查歌单引用的音频是否存在 |
 | `settings` | 保存 §4 的配置 |
 | `library:read` | 注册 `library` 能力的 provider 时宿主强制要求 |
 | `ui:inject` | 注册设置面板 |
 
-插件**不联网**（没有 `network` 权限），**不写任何文件**（回环代理是只读的）。
+插件**不发起任何网络请求**，**不写任何文件**（回环代理是只读的）。

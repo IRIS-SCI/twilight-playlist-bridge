@@ -207,3 +207,49 @@ test('the registered provider satisfies the host library/playlist contract', { s
     assert.ok('likedPlaylist' in library)
   })
 })
+
+/**
+ * The host gates several API calls on manifest permissions, and install runs a
+ * *trial activation* — so a missing permission does not merely disable a
+ * feature, it makes the whole plugin fail to install. `providers.register`
+ * requiring `network` is the non-obvious one: a purely local provider still has
+ * to declare it (manager.ts:1573).
+ *
+ * The required pairs are read out of the host source rather than hard-coded, so
+ * this guard follows the host instead of drifting from it.
+ */
+test('manifest declares every permission the host requires for the APIs it calls', { skip }, async () => {
+  const managerSource = await fs.readFile(
+    path.join(hostSource, 'src', 'main', 'plugins', 'manager.ts'),
+    'utf-8'
+  )
+  const manifest = JSON.parse(await fs.readFile(path.join(pluginRoot, 'plugin.json'), 'utf-8'))
+
+  // this.requirePermission(<pluginId>, '<permission>', '<capability>')
+  const requirementPattern =
+    /this\.requirePermission\(\s*[\w.]+\s*,\s*'([^']+)'\s*,\s*'([^']+)'\s*\)/g
+  const requirements = new Map()
+  for (const match of managerSource.matchAll(requirementPattern)) {
+    requirements.set(match[2], match[1])
+  }
+  assert.ok(requirements.size > 0, 'expected to find permission gates in the host source')
+
+  // Everything this plugin actually calls during activate() / a command.
+  const capabilitiesUsed = [
+    'providers.register',
+    '注册 library Provider 能力',
+    'ui.notify'
+  ]
+
+  for (const capability of capabilitiesUsed) {
+    const permission = requirements.get(capability)
+    assert.ok(permission, `host source no longer gates "${capability}"; update this test`)
+    assert.ok(
+      manifest.permissions.includes(permission),
+      `plugin calls "${capability}" but does not declare "${permission}" — install would fail`
+    )
+  }
+
+  // normalizeUiContribution additionally requires ui:inject for any contribution.
+  assert.ok(manifest.permissions.includes('ui:inject'))
+})
