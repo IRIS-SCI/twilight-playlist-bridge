@@ -5,6 +5,7 @@ import { decodePlaylistBuffer, detectDeclaredEncoding } from '../lib/decode.mjs'
 import { parseExtInf, parseM3u, splitArtistTitle } from '../lib/m3u.mjs'
 import { parsePls } from '../lib/pls.mjs'
 import {
+  describeTrackFileName,
   isWindowsPath,
   pathKey,
   playlistNameFromFile,
@@ -220,4 +221,53 @@ test('relocationCandidates re-attaches a moved library tail', () => {
 test('pathKey and playlistNameFromFile behave', () => {
   assert.equal(pathKey('D:/Music/A.FLAC'), 'd:\\music\\a.flac')
   assert.equal(playlistNameFromFile('D:\\lists\\My List.m3u8'), 'My List')
+})
+
+// These are the exact file names from the real playlists this plugin was built
+// for, so the naming rules are pinned to actual ripper output rather than
+// invented examples.
+test('describeTrackFileName recovers Artist - Title from real file names', () => {
+  const cases = [
+    ['01. Hans Zimmer - Dreaming of the Crash.flac', 'Dreaming of the Crash', 'Hans Zimmer'],
+    ['15. Hans Zimmer - S.T.A.Y.flac', 'S.T.A.Y', 'Hans Zimmer'],
+    ['23. Hans Zimmer - What Happens Nowʔ.flac', 'What Happens Nowʔ', 'Hans Zimmer'],
+    ['28. Hans Zimmer - Day One (Original Demo).flac', 'Day One (Original Demo)', 'Hans Zimmer'],
+    // `Artist -Title-` leaves a dangling separator that must not leak through.
+    ['01.Eaquira -一戒-.wav', '一戒', 'Eaquira'],
+    ['02.Kou -二戒-.wav', '二戒', 'Kou'],
+    ['09.Fervidex (full edit).wav', 'Fervidex (full edit)', ''],
+    // A dash with no surrounding space is part of the title.
+    ['27. Hans Zimmer - Tick-Tock.flac', 'Tick-Tock', 'Hans Zimmer'],
+    ['12 - Someone - A Title.mp3', 'A Title', 'Someone']
+  ]
+
+  for (const [fileName, title, artist] of cases) {
+    assert.deepEqual(
+      describeTrackFileName(fileName),
+      { title, artist },
+      `failed for ${fileName}`
+    )
+  }
+})
+
+test('describeTrackFileName leaves ambiguous names alone', () => {
+  // 2001 is not a 1-3 digit track number followed by a separator.
+  assert.deepEqual(describeTrackFileName('2001 A Space Odyssey.flac'), {
+    title: '2001 A Space Odyssey',
+    artist: ''
+  })
+  // No extension to strip: the dots belong to the title.
+  assert.deepEqual(describeTrackFileName('S.T.A.Y'), { title: 'S.T.A.Y', artist: '' })
+  assert.deepEqual(describeTrackFileName(''), { title: '', artist: '' })
+  assert.deepEqual(describeTrackFileName('   '), { title: '', artist: '' })
+})
+
+test('describeTrackFileName can be switched off entirely', () => {
+  // The escape hatch keeps the bare stem, track number and all.
+  assert.deepEqual(
+    describeTrackFileName('01. Hans Zimmer - Dreaming of the Crash.flac', {
+      splitArtistTitle: false
+    }),
+    { title: '01. Hans Zimmer - Dreaming of the Crash', artist: '' }
+  )
 })

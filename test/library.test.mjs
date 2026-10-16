@@ -245,6 +245,45 @@ test('fplite playlists borrow their names from index.txt', async (t) => {
   assert.equal(tracks[0].filePath, path.join(music, 'a.flac'))
 })
 
+test('a bare-path playlist with no EXTINF still yields real titles', async (t) => {
+  // The shape that actually shows up in the wild: a leading `#` comment, a BOM,
+  // and nothing but absolute paths — no #EXTM3U, no #EXTINF, no metadata at all.
+  const root = await makeWorkspace(t)
+  const music = path.join(root, 'Interstellar')
+  const lists = path.join(root, 'lists')
+  const names = [
+    '01. Hans Zimmer - Dreaming of the Crash.flac',
+    '02. Hans Zimmer - Cornfield Chase.flac',
+    '27. Hans Zimmer - Tick-Tock.flac'
+  ]
+  for (const name of names) await writeFile(path.join(music, name), 'fake')
+
+  const body = names.map((name) => path.join(music, name)).join('\r\n')
+  await writeFile(
+    path.join(lists, '星际穿越OST.m3u8'),
+    `\uFEFF#\r\n${body}\r\n`
+  )
+
+  const config = normalizeConfig({ playlistDirs: lists })
+  const provider = makeProvider(config, t)
+  const registration = provider.providerRegistration()
+
+  const { playlists } = await registration.fetchUserLibrary()
+  assert.equal(playlists.length, 1)
+  assert.equal(playlists[0].name, '星际穿越OST')
+
+  const tracks = await registration.fetchPlaylistTracks(playlists[0].id)
+  assert.deepEqual(
+    tracks.map((track) => [track.title, track.artist]),
+    [
+      ['Dreaming of the Crash', 'Hans Zimmer'],
+      ['Cornfield Chase', 'Hans Zimmer'],
+      ['Tick-Tock', 'Hans Zimmer']
+    ]
+  )
+  assert.equal(tracks[0].fileName, '01. Hans Zimmer - Dreaming of the Crash.flac')
+})
+
 test('skipping missing files can be disabled', async (t) => {
   const root = await makeWorkspace(t)
   const lists = path.join(root, 'lists')
