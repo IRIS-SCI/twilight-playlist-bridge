@@ -176,6 +176,53 @@ function registerCommand(context, command, handler) {
   if (typeof dispose === 'function') disposers.push(dispose)
 }
 
+/**
+ * Mirror every scanned playlist into the player's own local playlists
+ * (`音乐库 → 歌单`).
+ *
+ * Runs in the background so the settings command stays inside the host's 5 s
+ * budget, and is safe to repeat: the importer de-duplicates by track id, so a
+ * second pass only adds what is new.
+ */
+function mirrorToLocalPlaylists(context) {
+  const library = context.twilight.library
+  if (typeof library?.importPlaylists !== 'function') {
+    void notify(context, {
+      kind: 'warning',
+      message: '当前版本的 Twilight Echo 不支持「导入为本地歌单」，升级播放器后再试。'
+    })
+    return
+  }
+
+  void (async () => {
+    try {
+      const { playlists } = await runtime.library.listPlaylists(currentConfig)
+      const payload = []
+      for (const summary of playlists) {
+        const detail = await runtime.library.getPlaylistTracks(summary.id, currentConfig)
+        const paths = detail.tracks.map((track) => track.filePath).filter(Boolean)
+        // An empty playlist would create an empty local playlist; skip it.
+        if (paths.length > 0) payload.push({ name: summary.name, paths })
+      }
+
+      if (payload.length === 0) {
+        await notify(context, {
+          kind: 'warning',
+          message: '没有可导入的曲目：歌单里没有解析出任何文件路径。'
+        })
+        return
+      }
+
+      await library.importPlaylists({ playlists: payload })
+      context.logger.info(`已请求把 ${payload.length} 个歌单导入为本地歌单`)
+    } catch (error) {
+      const message = error?.message ?? String(error)
+      context.logger.error(`导入为本地歌单失败：${message}`)
+      await notify(context, { kind: 'error', message: `导入为本地歌单失败：${message}` })
+    }
+  })()
+}
+
 /** Persists a submitted settings form and kicks off a background rescan. */
 async function applySettings(context, values) {
   const next = configFromForm(values)
@@ -187,13 +234,16 @@ async function applySettings(context, values) {
 
   runtime?.library.invalidateAll()
   scheduleRefresh(context, { immediate: true })
+  if (next.importToLocalPlaylists) mirrorToLocalPlaylists(context)
 
   const dirCount = next.playlistDirs.length
   return {
     message:
       dirCount === 0
         ? '已保存，但没有填写歌单文件夹，暂时不会出现任何歌单。'
-        : `已保存 ${dirCount} 个目录，正在后台重新扫描。稍后回到音乐库刷新即可看到歌单。`,
+        : `已保存 ${dirCount} 个目录，正在后台重新扫描${
+            next.importToLocalPlaylists ? '，并同步为本地歌单' : ''
+          }。稍后回到音乐库刷新即可看到。`,
     form: buildForm()
   }
 }

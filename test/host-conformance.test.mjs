@@ -54,11 +54,12 @@ async function loadHostModule(relativePath) {
   return await import(pathToFileURL(path.join(hostSource, relativePath)).href)
 }
 
-function createFakeContext(storagePath, storedSettings = {}) {
+function createFakeContext(storagePath, storedSettings = {}, options = {}) {
   const commands = new Map()
   const contributions = []
   const notifications = []
   const providers = []
+  const playlistImports = []
 
   const context = {
     apiVersion: 3,
@@ -95,12 +96,22 @@ function createFakeContext(storagePath, storedSettings = {}) {
     }
   }
 
-  return { context, commands, contributions, notifications, providers }
+  // `twilight.library` was added in Twilight Echo 1.4 (library.importPlaylists).
+  // `options.libraryApi === false` emulates a host that predates it.
+  if (options.libraryApi !== false) {
+    context.twilight.library = {
+      async importPlaylists(request) {
+        playlistImports.push(request)
+      }
+    }
+  }
+
+  return { context, commands, contributions, notifications, providers, playlistImports }
 }
 
-async function withPlugin(run, storedSettings = {}) {
+async function withPlugin(run, storedSettings = {}, options = {}) {
   const storagePath = await fs.mkdtemp(path.join(os.tmpdir(), 'plfile-conformance-'))
-  const harness = createFakeContext(storagePath, storedSettings)
+  const harness = createFakeContext(storagePath, storedSettings, options)
   const plugin = await import(pathToFileURL(path.join(pluginRoot, 'index.mjs')).href)
   try {
     await plugin.activate(harness.context)
@@ -222,6 +233,101 @@ test('a successful scan tells the user where the playlists appear', { skip }, as
         assert.match(located.message, /我的音乐库/)
       },
       { config: { playlistDirs: [listsDir], extensions: ['m3u8'] } }
+    )
+  } finally {
+    await fs.rm(listsDir, { recursive: true, force: true })
+  }
+})
+
+test('saving with 导入为本地歌单 mirrors the playlists through the host API', { skip }, async () => {
+  const listsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'plfile-import-'))
+  try {
+    const music = path.join(listsDir, 'music')
+    await fs.mkdir(music, { recursive: true })
+    await fs.writeFile(path.join(music, '01. Hans Zimmer - Dreaming of the Crash.flac'), 'x')
+    await fs.writeFile(
+      path.join(listsDir, '星际穿越OST.m3u8'),
+      `#\n${path.join(music, '01. Hans Zimmer - Dreaming of the Crash.flac')}\n`
+    )
+
+    await withPlugin(
+      async (harness) => {
+        const handler = harness.commands.get('plfile.settings')
+        const saved = await handler(
+          {
+            playlistDirs: listsDir,
+            importToLocalPlaylists: 'true'
+          },
+          { signal: new AbortController().signal }
+        )
+        assert.match(saved.message, /同步为本地歌单/)
+
+        // The mirror runs in the background so the command stays inside the
+        // host's 5 s budget; wait for it to reach the API.
+        for (let attempt = 0; attempt < 40 && harness.playlistImports.length === 0; attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 50))
+        }
+        assert.equal(harness.playlistImports.length, 1, 'expected exactly one batched import')
+
+        const { playlists } = harness.playlistImports[0]
+        assert.equal(playlists.length, 1)
+        assert.equal(playlists[0].name, '星际穿越OST')
+        assert.deepEqual(playlists[0].paths, [
+          path.join(music, '01. Hans Zimmer - Dreaming of the Crash.flac')
+        ])
+      },
+      { config: { playlistDirs: [listsDir], extensions: ['m3u8'] } }
+    )
+  } finally {
+    await fs.rm(listsDir, { recursive: true, force: true })
+  }
+})
+
+test('the import toggle is off by default', { skip }, async () => {
+  const { normalizePluginSettingsForm } = await loadHostModule(
+    'src/renderer/src/components/settings-page/pluginSettingsForm.ts'
+  )
+  await withPlugin(async (harness) => {
+    const form = normalizePluginSettingsForm(
+      await harness.commands.get('plfile.settings')(
+        { source: 'settingsPanel', panelId: 'plfile-settings' },
+        { signal: new AbortController().signal }
+      )
+    )
+    const toggle = form.fields.find((field) => field.key === 'importToLocalPlaylists')
+    assert.ok(toggle, 'the import toggle must be offered')
+    assert.equal(toggle.value, 'false')
+  })
+})
+
+test('an older host without twilight.library is reported, not crashed on', { skip }, async () => {
+  const listsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'plfile-oldhost-'))
+  try {
+    const music = path.join(listsDir, 'music')
+    await fs.mkdir(music, { recursive: true })
+    await fs.writeFile(path.join(music, 'a.flac'), 'x')
+    await fs.writeFile(path.join(listsDir, 'list.m3u8'), `${path.join(music, 'a.flac')}\n`)
+
+    await withPlugin(
+      async (harness) => {
+        const saved = await harness.commands.get('plfile.settings')(
+          { playlistDirs: listsDir, importToLocalPlaylists: 'true' },
+          { signal: new AbortController().signal }
+        )
+        // The command itself must still succeed.
+        assert.equal(typeof saved.message, 'string')
+
+        for (let attempt = 0; attempt < 20 && harness.notifications.length === 0; attempt++) {
+          await new Promise((resolve) => setTimeout(resolve, 50))
+        }
+        assert.ok(
+          harness.notifications.some((notice) => notice.kind === 'warning'),
+          `expected a warning notice, got ${JSON.stringify(harness.notifications)}`
+        )
+        assert.equal(harness.playlistImports.length, 0)
+      },
+      { config: { playlistDirs: [listsDir], extensions: ['m3u8'] } },
+      { libraryApi: false }
     )
   } finally {
     await fs.rm(listsDir, { recursive: true, force: true })
