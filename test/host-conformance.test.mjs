@@ -253,14 +253,16 @@ test('saving with 导入为本地歌单 mirrors the playlists through the host A
     await withPlugin(
       async (harness) => {
         const handler = harness.commands.get('plfile.settings')
+        // Exactly how the host invokes a `button` field: one press, carrying
+        // the form's current draft values so no save is needed first.
         const saved = await handler(
           {
-            playlistDirs: listsDir,
-            importNow: 'import'
+            action: 'importNow',
+            values: { playlistDirs: listsDir }
           },
           { signal: new AbortController().signal }
         )
-        assert.match(saved.message, /导入为本地歌单/)
+        assert.match(saved.message, /扫描并导入/)
 
         // The mirror runs in the background so the command stays inside the
         // host's 5 s budget; wait for it to reach the API.
@@ -276,11 +278,10 @@ test('saving with 导入为本地歌单 mirrors the playlists through the host A
           path.join(music, '01. Hans Zimmer - Dreaming of the Crash.flac')
         ])
 
-        // Saving again without picking the action must NOT import a second
-        // time — that is what makes it a button instead of a setting.
-        assert.equal(saved.form.fields.find((f) => f.key === 'importNow')?.value, '')
+        // Saving the form normally must NOT import — the button is the only
+        // trigger, so an unrelated settings change stays cheap.
         await handler(
-          { playlistDirs: listsDir, importNow: '' },
+          { playlistDirs: listsDir },
           { signal: new AbortController().signal }
         )
         await new Promise((resolve) => setTimeout(resolve, 400))
@@ -293,7 +294,7 @@ test('saving with 导入为本地歌单 mirrors the playlists through the host A
   }
 })
 
-test('the import action defaults to 不操作 and is never persisted', { skip }, async () => {
+test('the import control is a real button in the settings form', { skip }, async () => {
   const { normalizePluginSettingsForm } = await loadHostModule(
     'src/renderer/src/components/settings-page/pluginSettingsForm.ts'
   )
@@ -306,12 +307,12 @@ test('the import action defaults to 不操作 and is never persisted', { skip },
     )
     const action = form.fields.find((field) => field.key === 'importNow')
     assert.ok(action, 'the import action must be offered')
-    assert.equal(action.type, 'select')
+    assert.equal(action.type, 'button')
     assert.equal(action.value, '')
-    assert.deepEqual(
-      action.options.map((option) => option.label),
-      ['不操作', '立即导入为本地歌单']
-    )
+    // Buttons fall back to the form's submitCommand, which is the only command
+    // the host can route for this plugin.
+    assert.equal(action.command, '')
+    assert.equal(form.submitCommand, 'plfile.settings')
   })
 })
 
@@ -326,7 +327,7 @@ test('an older host without twilight.library is reported, not crashed on', { ski
     await withPlugin(
       async (harness) => {
         const saved = await harness.commands.get('plfile.settings')(
-          { playlistDirs: listsDir, importNow: 'import' },
+          { action: 'importNow', values: { playlistDirs: listsDir } },
           { signal: new AbortController().signal }
         )
         // The command itself must still succeed.

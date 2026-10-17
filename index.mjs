@@ -32,6 +32,9 @@ import { createPlaylistFileProvider } from './lib/provider.mjs'
  */
 const SETTINGS_COMMAND = 'plfile.settings'
 
+/** Host cap for a playlist name; longer names reject the whole import batch. */
+const MAX_IMPORT_NAME_LENGTH = 80
+
 /** Remembers that the "point me at a folder" hint has already been shown. */
 const SETUP_ANNOUNCED_KEY = 'setupAnnounced'
 /** Remembers that the "here is where your playlists appear" hint was shown. */
@@ -207,7 +210,11 @@ function mirrorToLocalPlaylists(context) {
         })
         const paths = detail.tracks.map((track) => track.filePath).filter(Boolean)
         // An empty playlist would create an empty local playlist; skip it.
-        if (paths.length > 0) payload.push({ name: summary.name, paths })
+        // The host rejects (it does not truncate) names past 80 normalized
+        // characters, and one bad name fails the entire batch — so clamp here.
+        if (paths.length > 0) {
+          payload.push({ name: summary.name.slice(0, MAX_IMPORT_NAME_LENGTH), paths })
+        }
       }
 
       if (payload.length === 0) {
@@ -232,6 +239,31 @@ function mirrorToLocalPlaylists(context) {
   })()
 }
 
+/**
+ * The settings-panel 「立即导入为本地歌单」 button.
+ *
+ * One press does all three steps: persist whatever the form currently shows,
+ * rescan the folders, then import the batch — so the user does not have to save
+ * first. Returns a refreshed form so the notice line reflects the new scan.
+ */
+async function runImportAction(context, payload) {
+  if (payload?.values && typeof payload.values === 'object') {
+    const next = configFromForm(payload.values)
+    currentConfig = next
+    context.settings
+      .set(CONFIG_KEY, next)
+      .catch((error) => context.logger.error(`保存配置失败：${error?.message ?? error}`))
+    // A new config object, so the next list operation rescans the folders.
+    runtime?.library.invalidateAll()
+  }
+
+  mirrorToLocalPlaylists(context)
+  return {
+    message: '正在后台扫描并导入，完成后会弹出结果提示。',
+    form: buildForm()
+  }
+}
+
 /** Persists a submitted settings form and kicks off a background rescan. */
 async function applySettings(context, values) {
   const next = configFromForm(values)
@@ -244,20 +276,12 @@ async function applySettings(context, values) {
   runtime?.library.invalidateAll()
   scheduleRefresh(context, { immediate: true })
 
-  // A one-shot action rather than a stored setting: `importNow` is deliberately
-  // absent from the config, so the form below comes back on 「不操作」 and a
-  // later save does not silently re-import everything.
-  const wantsImport = values?.importNow === 'import'
-  if (wantsImport) mirrorToLocalPlaylists(context)
-
   const dirCount = next.playlistDirs.length
   return {
     message:
       dirCount === 0
         ? '已保存，但没有填写歌单文件夹，暂时不会出现任何歌单。'
-        : `已保存 ${dirCount} 个目录，正在后台重新扫描${
-            wantsImport ? '，并把这批歌单导入为本地歌单' : ''
-          }。`,
+        : `已保存 ${dirCount} 个目录，正在后台重新扫描。`,
     form: buildForm()
   }
 }
@@ -281,11 +305,13 @@ export async function activate(context) {
 
   registerCommand(context, SETTINGS_COMMAND, async (...args) => {
     // The host appends its own context object as the final argument, so the
-    // shape of the *first* argument is what distinguishes the three calls:
-    // absent = reset, `{ source: 'settingsPanel' }` = load, a field map = save.
+    // shape of the *first* argument is what distinguishes the calls:
+    // absent = reset, `{ source: 'settingsPanel' }` = load,
+    // `{ action: ... }` = a form button, a field map = save.
     const payload = args.length > 1 ? args[0] : undefined
     if (!payload || typeof payload !== 'object') return await resetSettings(context)
     if (payload.source === 'settingsPanel') return buildForm()
+    if (payload.action === 'importNow') return await runImportAction(context, payload)
     return await applySettings(context, payload)
   })
 
