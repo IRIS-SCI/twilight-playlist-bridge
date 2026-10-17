@@ -1,8 +1,8 @@
 {
   "id": "com.github.iris-sci.playlist-bridge",
   "name": "歌单文件桥接",
-  "version": "1.3.0",
-  "description": "直接读取任意播放器保存的 m3u8 / m3u / pls / xspf / wpl / asx / fpl / fplite 歌单文件，在 Twilight Echo 里按原样浏览和播放，无需逐个重新整理。",
+  "version": "1.3.1",
+  "description": "读取任意播放器保存的 m3u8 / m3u / pls / xspf / wpl / asx / fpl / fplite 歌单文件。到「设置 → 系统与关于 → 插件设置 → 歌单文件桥接」填入歌单文件夹即可。",
   "author": "IRIS-SCI",
   "license": "MIT",
   "type": [
