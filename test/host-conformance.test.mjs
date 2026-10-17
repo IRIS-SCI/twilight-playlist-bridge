@@ -256,11 +256,11 @@ test('saving with 导入为本地歌单 mirrors the playlists through the host A
         const saved = await handler(
           {
             playlistDirs: listsDir,
-            importToLocalPlaylists: 'true'
+            importNow: 'import'
           },
           { signal: new AbortController().signal }
         )
-        assert.match(saved.message, /同步为本地歌单/)
+        assert.match(saved.message, /导入为本地歌单/)
 
         // The mirror runs in the background so the command stays inside the
         // host's 5 s budget; wait for it to reach the API.
@@ -275,6 +275,16 @@ test('saving with 导入为本地歌单 mirrors the playlists through the host A
         assert.deepEqual(playlists[0].paths, [
           path.join(music, '01. Hans Zimmer - Dreaming of the Crash.flac')
         ])
+
+        // Saving again without picking the action must NOT import a second
+        // time — that is what makes it a button instead of a setting.
+        assert.equal(saved.form.fields.find((f) => f.key === 'importNow')?.value, '')
+        await handler(
+          { playlistDirs: listsDir, importNow: '' },
+          { signal: new AbortController().signal }
+        )
+        await new Promise((resolve) => setTimeout(resolve, 400))
+        assert.equal(harness.playlistImports.length, 1, 'a plain save must not re-import')
       },
       { config: { playlistDirs: [listsDir], extensions: ['m3u8'] } }
     )
@@ -283,7 +293,7 @@ test('saving with 导入为本地歌单 mirrors the playlists through the host A
   }
 })
 
-test('the import toggle is off by default', { skip }, async () => {
+test('the import action defaults to 不操作 and is never persisted', { skip }, async () => {
   const { normalizePluginSettingsForm } = await loadHostModule(
     'src/renderer/src/components/settings-page/pluginSettingsForm.ts'
   )
@@ -294,9 +304,14 @@ test('the import toggle is off by default', { skip }, async () => {
         { signal: new AbortController().signal }
       )
     )
-    const toggle = form.fields.find((field) => field.key === 'importToLocalPlaylists')
-    assert.ok(toggle, 'the import toggle must be offered')
-    assert.equal(toggle.value, 'false')
+    const action = form.fields.find((field) => field.key === 'importNow')
+    assert.ok(action, 'the import action must be offered')
+    assert.equal(action.type, 'select')
+    assert.equal(action.value, '')
+    assert.deepEqual(
+      action.options.map((option) => option.label),
+      ['不操作', '立即导入为本地歌单']
+    )
   })
 })
 
@@ -311,7 +326,7 @@ test('an older host without twilight.library is reported, not crashed on', { ski
     await withPlugin(
       async (harness) => {
         const saved = await harness.commands.get('plfile.settings')(
-          { playlistDirs: listsDir, importToLocalPlaylists: 'true' },
+          { playlistDirs: listsDir, importNow: 'import' },
           { signal: new AbortController().signal }
         )
         // The command itself must still succeed.

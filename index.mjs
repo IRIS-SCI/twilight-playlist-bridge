@@ -199,7 +199,12 @@ function mirrorToLocalPlaylists(context) {
       const { playlists } = await runtime.library.listPlaylists(currentConfig)
       const payload = []
       for (const summary of playlists) {
-        const detail = await runtime.library.getPlaylistTracks(summary.id, currentConfig)
+        // `keep: false` — the import only needs the paths; retaining every
+        // playlist's materialized track list would hold the whole catalogue in
+        // memory for the rest of the session.
+        const detail = await runtime.library.getPlaylistTracks(summary.id, currentConfig, {
+          keep: false
+        })
         const paths = detail.tracks.map((track) => track.filePath).filter(Boolean)
         // An empty playlist would create an empty local playlist; skip it.
         if (paths.length > 0) payload.push({ name: summary.name, paths })
@@ -219,6 +224,10 @@ function mirrorToLocalPlaylists(context) {
       const message = error?.message ?? String(error)
       context.logger.error(`导入为本地歌单失败：${message}`)
       await notify(context, { kind: 'error', message: `导入为本地歌单失败：${message}` })
+    } finally {
+      // Drop whatever the pass left behind; a one-off import has no reason to
+      // keep the catalogue warm.
+      runtime?.library.invalidateAll()
     }
   })()
 }
@@ -234,7 +243,12 @@ async function applySettings(context, values) {
 
   runtime?.library.invalidateAll()
   scheduleRefresh(context, { immediate: true })
-  if (next.importToLocalPlaylists) mirrorToLocalPlaylists(context)
+
+  // A one-shot action rather than a stored setting: `importNow` is deliberately
+  // absent from the config, so the form below comes back on 「不操作」 and a
+  // later save does not silently re-import everything.
+  const wantsImport = values?.importNow === 'import'
+  if (wantsImport) mirrorToLocalPlaylists(context)
 
   const dirCount = next.playlistDirs.length
   return {
@@ -242,8 +256,8 @@ async function applySettings(context, values) {
       dirCount === 0
         ? '已保存，但没有填写歌单文件夹，暂时不会出现任何歌单。'
         : `已保存 ${dirCount} 个目录，正在后台重新扫描${
-            next.importToLocalPlaylists ? '，并同步为本地歌单' : ''
-          }。稍后回到音乐库刷新即可看到。`,
+            wantsImport ? '，并把这批歌单导入为本地歌单' : ''
+          }。`,
     form: buildForm()
   }
 }
