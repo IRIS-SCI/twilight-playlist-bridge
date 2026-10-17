@@ -201,42 +201,15 @@ test('activate registers a host-valid UI contribution and settings form', { skip
 })
 
 test('a fresh install announces where to configure it', { skip }, async () => {
-  // Without this the plugin looks inert after install: the provider stays
-  // invisible until a folder is set, and the panel is buried in the settings.
+  // Without this the plugin looks inert after install: it shows nothing until a
+  // folder is set, and the panel is buried in the settings.
   await withPlugin(async (harness) => {
     assert.equal(harness.notifications.length, 1)
     const notice = harness.notifications[0]
     assert.match(notice.message, /插件设置/)
-    assert.match(notice.message, /我的音乐库/)
+    assert.match(notice.message, /立即导入为本地歌单/)
     assert.ok(notice.durationMs >= 2500 && notice.durationMs <= 30000)
   })
-})
-
-test('a successful scan tells the user where the playlists appear', { skip }, async () => {
-  // The playlists land under a sidebar group that is collapsed by default, so
-  // the location hint is the only thing that makes them findable.
-  const listsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'plfile-lists-'))
-  try {
-    await fs.writeFile(path.join(listsDir, '星际穿越OST.m3u8'), '#\nD:\\Music\\a.flac\n')
-
-    await withPlugin(
-      async (harness) => {
-        // The initial scan is deliberately deferred so activation stays inside
-        // the host's 5 s budget; wait for it to land.
-        await new Promise((resolve) => setTimeout(resolve, 600))
-        const located = harness.notifications.find((notice) =>
-          notice.message.includes('我的音乐库')
-        )
-        assert.ok(located, `expected a location hint, got ${JSON.stringify(harness.notifications)}`)
-        assert.match(located.message, /已索引 1 个歌单文件/)
-        assert.match(located.message, /流媒体音乐/)
-        assert.match(located.message, /我的音乐库/)
-      },
-      { config: { playlistDirs: [listsDir], extensions: ['m3u8'] } }
-    )
-  } finally {
-    await fs.rm(listsDir, { recursive: true, force: true })
-  }
 })
 
 test('saving with 导入为本地歌单 mirrors the playlists through the host API', { skip }, async () => {
@@ -350,55 +323,18 @@ test('an older host without twilight.library is reported, not crashed on', { ski
   }
 })
 
-test('the registered provider satisfies the host library/playlist contract', { skip }, async () => {
+test('the plugin registers no provider', { skip }, async () => {
+  // The plugin only imports playlists; registering a provider would make it
+  // demand `network` + `library:read` and surface a redundant audio source.
   await withPlugin(async (harness) => {
-    assert.equal(harness.providers.length, 1)
-    const provider = harness.providers[0]
-
-    assert.equal(provider.id, 'plfile')
-    // `library` is what puts the provider in the 音乐库 source switcher, and the
-    // host only allows it when the manifest declares library:read.
-    assert.ok(provider.capabilities.includes('library'))
-    assert.ok(provider.capabilities.includes('playlist'))
-    assert.ok(provider.capabilities.includes('playbackUrl'))
-
-    // `login` looks wrong for a plugin that never logs in, but it is load
-    // bearing: the host gates its external-provider state refresh on this
-    // capability (StreamingPage.vue:3561), and without that refresh
-    // `state.loggedIn` stays false and the library never loads
-    // (StreamingPage.vue:1703). Do not remove it without re-reading those two
-    // lines.
-    assert.ok(provider.capabilities.includes('login'))
-    assert.equal(provider.ui.authType, 'settings')
-
-    // host.ts copies every function-valued method into the handler table, so
-    // these keys are exactly what the host will call.
-    for (const method of [
-      'checkLogin',
-      'getProfile',
-      'fetchUserLibrary',
-      'fetchPlaylistTracks',
-      'getPlaybackUrl'
-    ]) {
-      assert.equal(typeof provider[method], 'function', `${method} must be a function`)
-    }
-
-    const login = await provider.checkLogin()
-    assert.equal(login.loggedIn, true)
-
-    const library = await provider.fetchUserLibrary(false)
-    assert.ok(library && typeof library === 'object')
-    assert.ok(Array.isArray(library.playlists))
-    assert.ok('likedPlaylist' in library)
+    assert.deepEqual(harness.providers, [])
   })
 })
 
 /**
  * The host gates several API calls on manifest permissions, and install runs a
  * *trial activation* — so a missing permission does not merely disable a
- * feature, it makes the whole plugin fail to install. `providers.register`
- * requiring `network` is the non-obvious one: a purely local provider still has
- * to declare it (manager.ts:1573).
+ * feature, it makes the whole plugin fail to install.
  *
  * The required pairs are read out of the host source rather than hard-coded, so
  * this guard follows the host instead of drifting from it.
@@ -420,11 +356,7 @@ test('manifest declares every permission the host requires for the APIs it calls
   assert.ok(requirements.size > 0, 'expected to find permission gates in the host source')
 
   // Everything this plugin actually calls during activate() / a command.
-  const capabilitiesUsed = [
-    'providers.register',
-    '注册 library Provider 能力',
-    'ui.notify'
-  ]
+  const capabilitiesUsed = ['ui.notify', 'library.importPlaylists']
 
   for (const capability of capabilitiesUsed) {
     const permission = requirements.get(capability)
@@ -437,4 +369,10 @@ test('manifest declares every permission the host requires for the APIs it calls
 
   // normalizeUiContribution additionally requires ui:inject for any contribution.
   assert.ok(manifest.permissions.includes('ui:inject'))
+
+  // A UI-only plugin that never registers a provider has no business asking for
+  // these; keeping them would mislead users on the install prompt.
+  assert.ok(!manifest.permissions.includes('network'))
+  assert.ok(!manifest.permissions.includes('library:read'))
+  assert.deepEqual(manifest.type, ['ui'])
 })

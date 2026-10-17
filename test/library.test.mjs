@@ -11,9 +11,7 @@ import {
   normalizeConfig,
   parseDirectoryList
 } from '../lib/config.mjs'
-import { createPlaylistFileProvider } from '../lib/provider.mjs'
-import { fileForPlaylistId, playlistIdForFile } from '../lib/library.mjs'
-import { contentTypeFor, parseRangeHeader } from '../lib/proxy.mjs'
+import { createPlaylistLibrary, fileForPlaylistId, playlistIdForFile } from '../lib/library.mjs'
 import { extensionOf, normalizeExtensions, scanPlaylistFiles } from '../lib/scan.mjs'
 
 const silentLogger = { debug() {}, info() {}, warn() {}, error() {} }
@@ -29,10 +27,16 @@ async function writeFile(target, contents) {
   await fs.writeFile(target, contents)
 }
 
-function makeProvider(config, t) {
-  const provider = createPlaylistFileProvider({ getConfig: () => config, logger: silentLogger })
-  t.after(() => provider.proxy.stop())
-  return provider
+function makeLibrary() {
+  return createPlaylistLibrary({ logger: silentLogger })
+}
+
+/** Scans and returns the materialized track list for the nth playlist. */
+async function readPlaylist(library, config, index = 0) {
+  const { playlists } = await library.listPlaylists(config)
+  assert.ok(playlists[index], `expected at least ${index + 1} playlist(s)`)
+  const detail = await library.getPlaylistTracks(playlists[index].id, config)
+  return { playlists, detail }
 }
 
 test('normalizeExtensions strips dots and de-duplicates', () => {
@@ -59,7 +63,6 @@ test('parseDirectoryList expands environment variables and ~', () => {
   process.env[key] = 'E:\\Expanded'
   try {
     assert.deepEqual(parseDirectoryList(`%${key}%\\playlists`), ['E:\\Expanded\\playlists'])
-    // Node's process.env is case-insensitive on Windows; make sure lookup works.
     assert.deepEqual(parseDirectoryList(`%${key.toLowerCase()}%\\x`), ['E:\\Expanded\\x'])
   } finally {
     delete process.env[key]
@@ -78,6 +81,16 @@ test('normalizeConfig clamps and defaults every field', () => {
   assert.equal(config.maxPlaylists, 2000)
   assert.equal(config.encoding, 'auto')
   assert.deepEqual(normalizeConfig(null), { ...DEFAULT_CONFIG })
+})
+
+test('the plugin exposes no playback configuration', () => {
+  // The plugin only imports playlists; it never serves audio, so the proxy
+  // playback setting must be gone from both the form and the config.
+  const form = buildSettingsForm(normalizeConfig({}), '')
+  const keys = form.fields.map((field) => field.key)
+  assert.ok(!keys.includes('proxyPlayback'))
+  assert.ok(!('proxyPlayback' in DEFAULT_CONFIG))
+  assert.ok(keys.includes('importNow'))
 })
 
 test('buildSettingsForm produces a host-valid settings-form DTO', () => {
@@ -144,7 +157,7 @@ test('scanPlaylistFiles respects recursion, extensions and missing roots', async
   assert.equal(missing.warnings.length, 1)
 })
 
-test('provider exposes playlists and resolves tracks end to end', async (t) => {
+test('a playlist resolves to tracks with paths and metadata', async (t) => {
   const root = await makeWorkspace(t)
   const music = path.join(root, 'music')
   const lists = path.join(root, 'lists')
@@ -165,29 +178,25 @@ test('provider exposes playlists and resolves tracks end to end', async (t) => {
   )
 
   const config = normalizeConfig({ playlistDirs: lists, skipMissing: true })
-  const provider = makeProvider(config, t)
-  const registration = provider.providerRegistration()
+  const library = makeLibrary()
+  const { playlists, detail } = await readPlaylist(library, config)
 
-  const library = await registration.fetchUserLibrary()
-  assert.equal(library.playlists.length, 1)
-  assert.equal(library.playlists[0].name, '我的歌单')
-  assert.equal(library.playlists[0].trackCount, 3)
+  assert.equal(playlists.length, 1)
+  assert.equal(playlists[0].name, '我的歌单')
+  assert.equal(playlists[0].trackCount, 3)
 
-  const tracks = await registration.fetchPlaylistTracks(library.playlists[0].id)
-  assert.equal(tracks.length, 2)
-  assert.equal(tracks[0].title, 'Creep')
-  assert.equal(tracks[0].artist, 'Radiohead')
-  assert.equal(tracks[0].duration, 238)
-  assert.equal(tracks[0].filePath, path.join(music, 'one.flac'))
-  assert.equal(tracks[0].source, 'plfile')
+  assert.equal(detail.tracks.length, 2)
+  assert.equal(detail.tracks[0].title, 'Creep')
+  assert.equal(detail.tracks[0].artist, 'Radiohead')
+  assert.equal(detail.tracks[0].duration, 238)
+  assert.equal(detail.tracks[0].filePath, path.join(music, 'one.flac'))
+  assert.equal(detail.missing, 1)
   // Relative entry resolved against the playlist's own directory.
-  assert.equal(tracks[1].filePath, path.join(music, 'two.mp3'))
-  // Provider track ids must carry the provider prefix.
-  assert.ok(tracks.every((track) => track.id.startsWith('plfile:')))
-  assert.equal(new Set(tracks.map((track) => track.id)).size, tracks.length)
+  assert.equal(detail.tracks[1].filePath, path.join(music, 'two.mp3'))
+  assert.ok(detail.tracks.every((track) => track.id.startsWith('plfile:')))
 })
 
-test('playlists from different players all load', async (t) => {
+test('playlists written by different players all parse', async (t) => {
   const root = await makeWorkspace(t)
   const music = path.join(root, 'music')
   const lists = path.join(root, 'lists')
@@ -195,7 +204,10 @@ test('playlists from different players all load', async (t) => {
     await writeFile(path.join(music, name), 'fake')
   }
 
-  await writeFile(path.join(lists, 'winamp.m3u8'), `#EXTM3U\n#EXTINF:10,A - a\n${path.join(music, 'a.flac')}\n`)
+  await writeFile(
+    path.join(lists, 'winamp.m3u8'),
+    `#EXTM3U\n#EXTINF:10,A - a\n${path.join(music, 'a.flac')}\n`
+  )
   await writeFile(
     path.join(lists, 'vlc.xspf'),
     `<trackList><track><location>${path.join(music, 'b.mp3')}</location><title>B</title></track></trackList>`
@@ -207,16 +219,43 @@ test('playlists from different players all load', async (t) => {
   await writeFile(path.join(lists, 'shoutcast.pls'), `[playlist]\nFile1=${path.join(music, 'a.flac')}\n`)
 
   const config = normalizeConfig({ playlistDirs: lists })
-  const provider = makeProvider(config, t)
-  const registration = provider.providerRegistration()
-
-  const { playlists } = await registration.fetchUserLibrary()
+  const library = makeLibrary()
+  const { playlists } = await library.listPlaylists(config)
   assert.equal(playlists.length, 4)
 
   for (const playlist of playlists) {
-    const tracks = await registration.fetchPlaylistTracks(playlist.id)
-    assert.equal(tracks.length, 1, `${playlist.name} should yield one track`)
+    const detail = await library.getPlaylistTracks(playlist.id, config)
+    assert.equal(detail.tracks.length, 1, `${playlist.name} should yield one track`)
   }
+})
+
+test('a bare-path playlist with no EXTINF still yields real titles', async (t) => {
+  const root = await makeWorkspace(t)
+  const music = path.join(root, 'Interstellar')
+  const lists = path.join(root, 'lists')
+  const names = [
+    '01. Hans Zimmer - Dreaming of the Crash.flac',
+    '02. Hans Zimmer - Cornfield Chase.flac',
+    '27. Hans Zimmer - Tick-Tock.flac'
+  ]
+  for (const name of names) await writeFile(path.join(music, name), 'fake')
+
+  const body = names.map((name) => path.join(music, name)).join('\r\n')
+  await writeFile(path.join(lists, '星际穿越OST.m3u8'), `\uFEFF#\r\n${body}\r\n`)
+
+  const config = normalizeConfig({ playlistDirs: lists })
+  const library = makeLibrary()
+  const { playlists, detail } = await readPlaylist(library, config)
+
+  assert.equal(playlists[0].name, '星际穿越OST')
+  assert.deepEqual(
+    detail.tracks.map((track) => [track.title, track.artist]),
+    [
+      ['Dreaming of the Crash', 'Hans Zimmer'],
+      ['Cornfield Chase', 'Hans Zimmer'],
+      ['Tick-Tock', 'Hans Zimmer']
+    ]
+  )
 })
 
 test('fplite playlists borrow their names from index.txt', async (t) => {
@@ -233,55 +272,10 @@ test('fplite playlists borrow their names from index.txt', async (t) => {
   )
 
   const config = normalizeConfig({ playlistDirs: lists })
-  const provider = makeProvider(config, t)
-  const registration = provider.providerRegistration()
-
-  const { playlists } = await registration.fetchUserLibrary()
-  assert.equal(playlists.length, 1)
+  const library = makeLibrary()
+  const { playlists, detail } = await readPlaylist(library, config)
   assert.equal(playlists[0].name, '默认列表')
-
-  const tracks = await registration.fetchPlaylistTracks(playlists[0].id)
-  assert.equal(tracks.length, 1)
-  assert.equal(tracks[0].filePath, path.join(music, 'a.flac'))
-})
-
-test('a bare-path playlist with no EXTINF still yields real titles', async (t) => {
-  // The shape that actually shows up in the wild: a leading `#` comment, a BOM,
-  // and nothing but absolute paths — no #EXTM3U, no #EXTINF, no metadata at all.
-  const root = await makeWorkspace(t)
-  const music = path.join(root, 'Interstellar')
-  const lists = path.join(root, 'lists')
-  const names = [
-    '01. Hans Zimmer - Dreaming of the Crash.flac',
-    '02. Hans Zimmer - Cornfield Chase.flac',
-    '27. Hans Zimmer - Tick-Tock.flac'
-  ]
-  for (const name of names) await writeFile(path.join(music, name), 'fake')
-
-  const body = names.map((name) => path.join(music, name)).join('\r\n')
-  await writeFile(
-    path.join(lists, '星际穿越OST.m3u8'),
-    `\uFEFF#\r\n${body}\r\n`
-  )
-
-  const config = normalizeConfig({ playlistDirs: lists })
-  const provider = makeProvider(config, t)
-  const registration = provider.providerRegistration()
-
-  const { playlists } = await registration.fetchUserLibrary()
-  assert.equal(playlists.length, 1)
-  assert.equal(playlists[0].name, '星际穿越OST')
-
-  const tracks = await registration.fetchPlaylistTracks(playlists[0].id)
-  assert.deepEqual(
-    tracks.map((track) => [track.title, track.artist]),
-    [
-      ['Dreaming of the Crash', 'Hans Zimmer'],
-      ['Cornfield Chase', 'Hans Zimmer'],
-      ['Tick-Tock', 'Hans Zimmer']
-    ]
-  )
-  assert.equal(tracks[0].fileName, '01. Hans Zimmer - Dreaming of the Crash.flac')
+  assert.equal(detail.tracks[0].filePath, path.join(music, 'a.flac'))
 })
 
 test('skipping missing files can be disabled', async (t) => {
@@ -290,13 +284,10 @@ test('skipping missing files can be disabled', async (t) => {
   await writeFile(path.join(lists, 'a.m3u'), 'D:\\nope\\gone.flac')
 
   const config = normalizeConfig({ playlistDirs: lists, skipMissing: false })
-  const provider = makeProvider(config, t)
-  const registration = provider.providerRegistration()
-
-  const { playlists } = await registration.fetchUserLibrary()
-  const tracks = await registration.fetchPlaylistTracks(playlists[0].id)
-  assert.equal(tracks.length, 1)
-  assert.equal(tracks[0].filePath, 'D:\\nope\\gone.flac')
+  const library = makeLibrary()
+  const { detail } = await readPlaylist(library, config)
+  assert.equal(detail.tracks.length, 1)
+  assert.equal(detail.tracks[0].filePath, 'D:\\nope\\gone.flac')
 })
 
 test('duplicate songs in one playlist get distinct ids', async (t) => {
@@ -310,13 +301,10 @@ test('duplicate songs in one playlist get distinct ids', async (t) => {
   )
 
   const config = normalizeConfig({ playlistDirs: lists })
-  const provider = makeProvider(config, t)
-  const registration = provider.providerRegistration()
-
-  const { playlists } = await registration.fetchUserLibrary()
-  const tracks = await registration.fetchPlaylistTracks(playlists[0].id)
-  assert.equal(tracks.length, 2)
-  assert.notEqual(tracks[0].id, tracks[1].id)
+  const library = makeLibrary()
+  const { detail } = await readPlaylist(library, config)
+  assert.equal(detail.tracks.length, 2)
+  assert.notEqual(detail.tracks[0].id, detail.tracks[1].id)
 })
 
 test('moved library roots are repaired through searchRoots', async (t) => {
@@ -327,13 +315,10 @@ test('moved library roots are repaired through searchRoots', async (t) => {
   await writeFile(path.join(lists, 'moved.m3u'), 'D:\\Music\\Album\\x.flac')
 
   const config = normalizeConfig({ playlistDirs: lists, searchRoots: relocated })
-  const provider = makeProvider(config, t)
-  const registration = provider.providerRegistration()
-
-  const { playlists } = await registration.fetchUserLibrary()
-  const tracks = await registration.fetchPlaylistTracks(playlists[0].id)
-  assert.equal(tracks.length, 1)
-  assert.equal(tracks[0].filePath, path.join(relocated, 'Album', 'x.flac'))
+  const library = makeLibrary()
+  const { detail } = await readPlaylist(library, config)
+  assert.equal(detail.tracks.length, 1)
+  assert.equal(detail.tracks[0].filePath, path.join(relocated, 'Album', 'x.flac'))
 })
 
 test('percent-encoded file:// entries fall back to the decoded path', async (t) => {
@@ -344,106 +329,34 @@ test('percent-encoded file:// entries fall back to the decoded path', async (t) 
   await writeFile(path.join(lists, 'escaped.m3u8'), `file:///${path.join(music, 'a.flac')}\n`)
 
   const config = normalizeConfig({ playlistDirs: lists })
-  const provider = makeProvider(config, t)
-  const registration = provider.providerRegistration()
-
-  const { playlists } = await registration.fetchUserLibrary()
-  const tracks = await registration.fetchPlaylistTracks(playlists[0].id)
-  assert.equal(tracks.length, 1)
-  assert.equal(tracks[0].filePath, path.join(music, 'a.flac'))
+  const library = makeLibrary()
+  const { detail } = await readPlaylist(library, config)
+  assert.equal(detail.tracks.length, 1)
+  assert.equal(detail.tracks[0].filePath, path.join(music, 'a.flac'))
 })
 
-test('getPlaybackUrl returns the plain path by default and passes streams through', async (t) => {
+test('reading many playlists keeps working without retaining every track list', async (t) => {
+  // The bulk import builds each playlist with `keep: false`; that path must
+  // still produce complete results on every read.
   const root = await makeWorkspace(t)
-  const lists = path.join(root, 'lists')
   const music = path.join(root, 'music')
+  const lists = path.join(root, 'lists')
   await writeFile(path.join(music, 'a.flac'), 'fake')
-  await writeFile(
-    path.join(lists, 'mix.m3u'),
-    [path.join(music, 'a.flac'), 'https://stream.example/live'].join('\n')
-  )
+
+  for (let index = 0; index < 20; index++) {
+    await writeFile(path.join(lists, `list${index}.m3u`), path.join(music, 'a.flac'))
+  }
 
   const config = normalizeConfig({ playlistDirs: lists })
-  const provider = makeProvider(config, t)
-  const registration = provider.providerRegistration()
+  const library = makeLibrary()
+  const { playlists } = await library.listPlaylists(config)
+  assert.equal(playlists.length, 20)
 
-  const { playlists } = await registration.fetchUserLibrary()
-  const tracks = await registration.fetchPlaylistTracks(playlists[0].id)
+  for (const playlist of playlists) {
+    const detail = await library.getPlaylistTracks(playlist.id, config, { keep: false })
+    assert.equal(detail.tracks.length, 1)
+  }
 
-  assert.equal(await registration.getPlaybackUrl(tracks[0]), path.join(music, 'a.flac'))
-  assert.equal(await registration.getPlaybackUrl(tracks[1]), 'https://stream.example/live')
-  assert.equal(provider.proxy.isRunning(), false)
-})
-
-test('proxy playback serves bytes with Range support', async (t) => {
-  const root = await makeWorkspace(t)
-  const lists = path.join(root, 'lists')
-  const music = path.join(root, 'music')
-  const payload = 'abcdefghij'
-  await writeFile(path.join(music, 'a.flac'), payload)
-  await writeFile(path.join(lists, 'a.m3u'), path.join(music, 'a.flac'))
-
-  const config = normalizeConfig({ playlistDirs: lists, proxyPlayback: true })
-  const provider = makeProvider(config, t)
-  const registration = provider.providerRegistration()
-
-  const { playlists } = await registration.fetchUserLibrary()
-  const tracks = await registration.fetchPlaylistTracks(playlists[0].id)
-  const url = await registration.getPlaybackUrl(tracks[0])
-
-  assert.match(url, /^http:\/\/127\.0\.0\.1:\d+\/audio\/[0-9a-f]{36}$/)
-  // A path must never appear in the URL.
-  assert.equal(url.includes('music'), false)
-  assert.equal(provider.proxy.isRunning(), true)
-
-  const full = await fetch(url)
-  assert.equal(full.status, 200)
-  assert.equal(full.headers.get('accept-ranges'), 'bytes')
-  assert.equal(await full.text(), payload)
-
-  const ranged = await fetch(url, { headers: { Range: 'bytes=2-4' } })
-  assert.equal(ranged.status, 206)
-  assert.equal(ranged.headers.get('content-range'), 'bytes 2-4/10')
-  assert.equal(await ranged.text(), 'cde')
-
-  // Repeated resolution must reuse the same token rather than leaking new ones.
-  assert.equal(await registration.getPlaybackUrl(tracks[0]), url)
-})
-
-test('proxy refuses unknown tokens and non-GET methods', async (t) => {
-  const root = await makeWorkspace(t)
-  const lists = path.join(root, 'lists')
-  const music = path.join(root, 'music')
-  await writeFile(path.join(music, 'a.flac'), 'fake')
-  await writeFile(path.join(lists, 'a.m3u'), path.join(music, 'a.flac'))
-
-  const config = normalizeConfig({ playlistDirs: lists, proxyPlayback: true })
-  const provider = makeProvider(config, t)
-  const registration = provider.providerRegistration()
-  const { playlists } = await registration.fetchUserLibrary()
-  const tracks = await registration.fetchPlaylistTracks(playlists[0].id)
-  const url = await registration.getPlaybackUrl(tracks[0])
-  const origin = new URL(url).origin
-
-  assert.equal((await fetch(`${origin}/audio/deadbeef`)).status, 404)
-  assert.equal((await fetch(`${origin}/`)).status, 404)
-  assert.equal((await fetch(url, { method: 'POST' })).status, 405)
-})
-
-test('parseRangeHeader rejects malformed ranges', () => {
-  assert.deepEqual(parseRangeHeader('bytes=0-4', 10), { start: 0, end: 4 })
-  assert.deepEqual(parseRangeHeader('bytes=5-', 10), { start: 5, end: 9 })
-  assert.deepEqual(parseRangeHeader('bytes=-3', 10), { start: 7, end: 9 })
-  assert.deepEqual(parseRangeHeader('bytes=0-99', 10), { start: 0, end: 9 })
-  assert.equal(parseRangeHeader('bytes=99-100', 10), null)
-  assert.equal(parseRangeHeader('bytes=5-2', 10), null)
-  assert.equal(parseRangeHeader('items=0-4', 10), null)
-  assert.equal(parseRangeHeader(undefined, 10), null)
-})
-
-test('contentTypeFor maps the formats a music library actually holds', () => {
-  assert.equal(contentTypeFor('a.flac'), 'audio/flac')
-  assert.equal(contentTypeFor('a.FLAC'), 'audio/flac')
-  assert.equal(contentTypeFor('a.dsf'), 'audio/x-dsf')
-  assert.equal(contentTypeFor('a.unknown'), 'application/octet-stream')
+  const again = await library.getPlaylistTracks(playlists[0].id, config, { keep: false })
+  assert.equal(again.tracks.length, 1)
 })

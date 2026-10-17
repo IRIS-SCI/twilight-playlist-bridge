@@ -1,9 +1,9 @@
 /**
  * 歌单文件桥接 — Twilight Echo plugin entry point.
  *
- * Registers the `plfile` provider, which exposes every playlist file found in
- * the configured folders as a browsable playlist — regardless of which player
- * wrote it — plus a settings panel to point it at those folders.
+ * A UI-only plugin: a settings panel that scans playlist files written by any
+ * player and imports them into the player's own local playlists. It registers
+ * no provider and plays nothing itself.
  *
  * Timing rules this file obeys (from src/main/plugins/manager.ts):
  *  - `activate` is killed after 5 s, so the initial scan is fire-and-forget;
@@ -18,17 +18,17 @@ import {
   DEFAULT_CONFIG,
   normalizeConfig
 } from './lib/config.mjs'
-import { createPlaylistFileProvider } from './lib/provider.mjs'
+import { createPlaylistLibrary } from './lib/library.mjs'
 
 /**
- * One command serves load, save and reset.
+ * One command serves load, save, reset and the import button.
  *
  * The host resolves a command's owner by scanning *registered UI contributions*
  * for one whose `command` matches, and rejects anything else with
  * "UI command 未注册" (manager.ts:720). Calling `ui.onCommand` for a name that
  * no contribution declares is therefore useless — the renderer can never reach
- * it. Since a plugin only gets one settings panel, all three operations share
- * the command that panel declares and are told apart by their arguments.
+ * it. Since a plugin only gets one settings panel, all operations share the
+ * command that panel declares and are told apart by their arguments.
  */
 const SETTINGS_COMMAND = 'plfile.settings'
 
@@ -37,17 +37,14 @@ const MAX_IMPORT_NAME_LENGTH = 80
 
 /** Remembers that the "point me at a folder" hint has already been shown. */
 const SETUP_ANNOUNCED_KEY = 'setupAnnounced'
-/** Remembers that the "here is where your playlists appear" hint was shown. */
-const LOCATED_ANNOUNCED_KEY = 'locatedAnnounced'
 
-/** @type {ReturnType<typeof createPlaylistFileProvider> | null} */
+/** @type {ReturnType<typeof createPlaylistLibrary> | null} */
 let runtime = null
 let disposers = []
 let refreshTimer = null
 let setupAnnounced = false
-let locatedAnnounced = false
 
-/** Persisted config, kept in memory so provider calls never await a read. */
+/** Persisted config, kept in memory so command handlers never await a read. */
 let currentConfig = { ...DEFAULT_CONFIG }
 
 function formatTime(iso) {
@@ -70,7 +67,7 @@ function statusNotice(config, status) {
 }
 
 function buildForm() {
-  const status = runtime?.library.status() ?? {
+  const status = runtime?.status() ?? {
     fileCount: 0,
     refreshing: false,
     lastRefreshAt: null,
@@ -91,18 +88,16 @@ async function loadConfig(context) {
   }
   try {
     setupAnnounced = (await context.settings.get(SETUP_ANNOUNCED_KEY)) === true
-    locatedAnnounced = (await context.settings.get(LOCATED_ANNOUNCED_KEY)) === true
   } catch {
     setupAnnounced = false
-    locatedAnnounced = false
   }
   return currentConfig
 }
 
 /**
- * A freshly installed plugin otherwise looks like it did nothing at all: the
- * provider stays invisible until a folder is configured, and the settings panel
- * is buried under 设置 → 系统与关于. Say so once, out loud.
+ * A freshly installed plugin otherwise looks like it did nothing at all: it
+ * shows no playlists until a folder is configured, and the settings panel is
+ * buried under 设置 → 系统与关于. Say so once, out loud.
  */
 function announceSetupIfNeeded(context) {
   if (setupAnnounced || currentConfig.playlistDirs.length > 0) return
@@ -114,7 +109,7 @@ function announceSetupIfNeeded(context) {
   void notify(context, {
     kind: 'info',
     message:
-      '歌单文件桥接已启用。下一步：设置 → 系统与关于 → 插件设置 → 歌单文件桥接，填入存放歌单的文件夹；填好后歌单会出现在「我的音乐库」的音源下拉里。',
+      '歌单文件桥接已启用。下一步：设置 → 系统与关于 → 插件设置 → 歌单文件桥接，填入存放歌单的文件夹，再点「立即导入为本地歌单」。',
     durationMs: 15000
   })
 }
@@ -127,8 +122,8 @@ function scheduleRefresh(context, { immediate = true } = {}) {
   }
   const run = () => {
     refreshTimer = null
-    runtime?.library
-      .refresh(currentConfig)
+    runtime
+      ?.refresh(currentConfig)
       .then((snapshot) => {
         if (!snapshot) return
         const total = snapshot.files.length
@@ -139,18 +134,6 @@ function scheduleRefresh(context, { immediate = true } = {}) {
           void notify(context, {
             kind: 'warning',
             message: '没有在指定目录找到歌单文件，请检查「歌单文件夹」和扩展名设置。'
-          })
-        } else if (total > 0 && !locatedAnnounced) {
-          // The playlists live under a sidebar group that is collapsed by
-          // default, so without this nobody finds them.
-          locatedAnnounced = true
-          context.settings
-            .set(LOCATED_ANNOUNCED_KEY, true)
-            .catch((error) => context.logger.warn(`记录引导状态失败：${error?.message ?? error}`))
-          void notify(context, {
-            kind: 'success',
-            message: `已索引 ${total} 个歌单文件。查看方法：左侧「流媒体音乐」→「我的音乐库」，点标题「…个人音乐库」右边那个写着音源名的小按钮，在弹出列表里选「歌单文件」。`,
-            durationMs: 20000
           })
         }
       })
@@ -199,13 +182,13 @@ function mirrorToLocalPlaylists(context) {
 
   void (async () => {
     try {
-      const { playlists } = await runtime.library.listPlaylists(currentConfig)
+      const { playlists } = await runtime.listPlaylists(currentConfig)
       const payload = []
       for (const summary of playlists) {
         // `keep: false` — the import only needs the paths; retaining every
         // playlist's materialized track list would hold the whole catalogue in
         // memory for the rest of the session.
-        const detail = await runtime.library.getPlaylistTracks(summary.id, currentConfig, {
+        const detail = await runtime.getPlaylistTracks(summary.id, currentConfig, {
           keep: false
         })
         const paths = detail.tracks.map((track) => track.filePath).filter(Boolean)
@@ -234,7 +217,7 @@ function mirrorToLocalPlaylists(context) {
     } finally {
       // Drop whatever the pass left behind; a one-off import has no reason to
       // keep the catalogue warm.
-      runtime?.library.invalidateAll()
+      runtime?.invalidateAll()
     }
   })()
 }
@@ -254,7 +237,7 @@ async function runImportAction(context, payload) {
       .set(CONFIG_KEY, next)
       .catch((error) => context.logger.error(`保存配置失败：${error?.message ?? error}`))
     // A new config object, so the next list operation rescans the folders.
-    runtime?.library.invalidateAll()
+    runtime?.invalidateAll()
   }
 
   mirrorToLocalPlaylists(context)
@@ -273,7 +256,7 @@ async function applySettings(context, values) {
     .set(CONFIG_KEY, next)
     .catch((error) => context.logger.error(`保存配置失败：${error?.message ?? error}`))
 
-  runtime?.library.invalidateAll()
+  runtime?.invalidateAll()
   scheduleRefresh(context, { immediate: true })
 
   const dirCount = next.playlistDirs.length
@@ -289,17 +272,13 @@ async function applySettings(context, values) {
 async function resetSettings(context) {
   currentConfig = normalizeConfig(DEFAULT_CONFIG)
   await context.settings.set(CONFIG_KEY, currentConfig)
-  runtime?.library.invalidateAll()
+  runtime?.invalidateAll()
   scheduleRefresh(context, { immediate: true })
   return { message: '已恢复默认设置', form: buildForm() }
 }
 
 export async function activate(context) {
-  const provider = createPlaylistFileProvider({
-    getConfig: () => currentConfig,
-    logger: context.logger
-  })
-  runtime = provider
+  runtime = createPlaylistLibrary({ logger: context.logger })
 
   await loadConfig(context)
 
@@ -315,13 +294,11 @@ export async function activate(context) {
     return await applySettings(context, payload)
   })
 
-  await context.twilight.providers.register(provider.providerRegistration())
-
   await context.twilight.ui.register({
     id: 'plfile-settings',
     kind: 'settingsPanel',
     title: '歌单文件桥接',
-    description: '读取任意播放器保存的 m3u8 / m3u / pls / xspf / wpl / fpl / fplite 歌单',
+    description: '把任意播放器保存的 m3u8 / m3u / pls / xspf / wpl / fpl / fplite 歌单导入为本地歌单',
     icon: 'pi pi-list',
     command: SETTINGS_COMMAND,
     autoLoad: true
@@ -343,11 +320,6 @@ export async function deactivate() {
     } catch {
       // The host may already have cleared its command table.
     }
-  }
-  try {
-    await runtime?.proxy.stop()
-  } catch {
-    // Shutting down: a failed close must not surface as a plugin error.
   }
   runtime = null
 }
