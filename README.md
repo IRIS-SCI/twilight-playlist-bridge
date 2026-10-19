@@ -13,6 +13,13 @@ m3u8、m3u、pls、xspf、wpl、asx、fpl、fplite。几十个歌单不用在播
 
 ---
 
+## 版本要求
+
+需要 **Twilight Echo 1.3.2 或更高**（任何包含 `twilight.library` 与 `button` 设置字段的版本）。
+
+在 **1.3.1 及更早**上：插件能装、能保存配置，但设置里**不会出现「立即导入为本地歌单」按钮**
+——宿主会静默丢弃它不认识的控件类型。这是宿主侧的限制，不是插件的问题。
+
 ## 安装
 
 1. 在 [Releases](https://github.com/IRIS-SCI/twilight-playlist-bridge/releases) 下载最新的 `.tep`

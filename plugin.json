@@ -1,7 +1,7 @@
 {
   "id": "com.github.iris-sci.playlist-bridge",
   "name": "歌单文件桥接",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "把任意播放器保存的 m3u8 / m3u / pls / xspf / wpl / asx / fpl / fplite 歌单导入为本地歌单。配置：设置 → 系统与关于 → 插件设置 → 歌单文件桥接。",
   "author": "IRIS-SCI",
   "license": "MIT",
